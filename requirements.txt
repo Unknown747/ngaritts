@@ -1,7 +1,6 @@
 Flask==2.3.3
 requests==2.31.0
 python-dotenv==1.0.0
-Flask==2.3.3
-python-dotenv==1.0.0
-requests==2.31.0
 eth-account==0.10.0
+psutil
+gunicorn

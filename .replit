@@ -2,7 +2,8 @@ modules = ["python-3.12", "web"]
 
 [deployment]
 router = "application"
-deploymentTarget = "autoscale"
+deploymentTarget = "vm"
+run = ["gunicorn", "--bind=0.0.0.0:5000", "--workers=1", "--threads=4", "--timeout=120", "main:app"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
