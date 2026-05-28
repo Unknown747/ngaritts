@@ -5,9 +5,12 @@ import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import requests
+from eth_account import Account
 from flask import Flask, render_template, jsonify
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
+Account.enable_unaudited_hdwallet_features()
 
 load_dotenv()
 
@@ -170,15 +173,11 @@ def rotate_rpc():
     rpc_status = "Rotating"
 
 def generate_random_wallet():
-    # Generate random private key (64 hex chars)
-    private_key = ''.join(random.choices('0123456789abcdef', k=64))
-    
-    # Derive address from private key (simplified - in real scenario use proper crypto)
-    # For brute force, we simulate address generation
-    # Note: Real implementation would use eth-account library, but for demo:
-    address = '0x' + ''.join(random.choices('0123456789abcdef', k=40))
-    
-    return private_key, address
+    private_key_bytes = bytes(random.getrandbits(8) for _ in range(32))
+    private_key_hex = private_key_bytes.hex()
+    acct = Account.from_key(private_key_bytes)
+    address = acct.address
+    return private_key_hex, address
 
 def check_balance(address):
     for attempt in range(2):
