@@ -3,14 +3,11 @@ import json
 import time
 import random
 import threading
-from concurrent.futures import ThreadPoolExecutor
 import requests
 from eth_account import Account
 from flask import Flask, render_template, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
-
-Account.enable_unaudited_hdwallet_features()
 
 load_dotenv()
 
@@ -36,12 +33,28 @@ total_checked = 0
 total_found = 0
 total_eth_found = 0.0
 start_time = datetime.now()
-rpc_status = "Online"
+rpc_status = f"Active ({len(RPC_LIST)} RPCs)"
 last_logs = []
 found_wallets = []
 last_found = None
 running = True
 lock = threading.Lock()
+
+# Sliding window untuk speed real-time (10 detik)
+speed_window = []
+speed_lock = threading.Lock()
+
+def record_check():
+    with speed_lock:
+        speed_window.append(time.time())
+
+def get_current_speed():
+    now = time.time()
+    with speed_lock:
+        recent = [t for t in speed_window if now - t <= 10]
+        speed_window.clear()
+        speed_window.extend(recent)
+        return round(len(recent) / 10, 1)
 
 # ============ PER-THREAD RPC MANAGER ============
 class RPCManager:
@@ -49,6 +62,8 @@ class RPCManager:
         self._rpcs = list(RPC_LIST)
         self._index = random.randint(0, len(self._rpcs) - 1)
         self._errors = 0
+        self._session = requests.Session()
+        self._session.headers.update({"Content-Type": "application/json"})
 
     @property
     def current(self):
@@ -57,11 +72,16 @@ class RPCManager:
     def next(self):
         self._index = (self._index + 1) % len(self._rpcs)
         self._errors = 0
+        self._update_global_status()
 
     def on_error(self):
         self._errors += 1
         if self._errors >= 3:
             self.next()
+
+    def _update_global_status(self):
+        global rpc_status
+        rpc_status = f"Active ({len(self._rpcs)} RPCs)"
 
     def request(self, method, params):
         payload = {
@@ -70,10 +90,9 @@ class RPCManager:
             "params": params,
             "id": random.randint(1, 10000)
         }
-        headers = {"Content-Type": "application/json"}
         for _ in range(len(self._rpcs)):
             try:
-                resp = requests.post(self.current, json=payload, headers=headers, timeout=5)
+                resp = self._session.post(self.current, json=payload, timeout=5)
                 if resp.status_code == 200:
                     data = resp.json()
                     if "error" not in data:
@@ -110,13 +129,15 @@ def load_saved_data():
 
 def save_found():
     with lock:
-        with open(FOUND_FILE, 'w') as f:
-            json.dump(found_wallets[-100:], f, indent=2)  # Keep last 100
+        snapshot = list(found_wallets[-100:])
+    with open(FOUND_FILE, 'w') as f:
+        json.dump(snapshot, f, indent=2)
 
 def save_progress():
     with lock:
-        with open(PROGRESS_FILE, 'w') as f:
-            json.dump({'total_checked': total_checked}, f)
+        checked = total_checked
+    with open(PROGRESS_FILE, 'w') as f:
+        json.dump({'total_checked': checked}, f)
 
 def add_log(message, is_error=False):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -202,7 +223,7 @@ def brute_worker(thread_id):
     global total_checked, total_found, total_eth_found, last_found, running
 
     rpc = RPCManager()
-    add_log(f"🔌 Thread[{thread_id}] started → RPC: {rpc.current[:30]}...")
+    consecutive_errors = 0
 
     while running:
         try:
@@ -212,6 +233,8 @@ def brute_worker(thread_id):
             with lock:
                 total_checked += 1
                 checked_now = total_checked
+
+            record_check()
 
             if balance is not None and balance > 0:
                 eth_price = get_cached_eth_price()
@@ -259,15 +282,15 @@ def index():
 @app.route('/api/stats')
 def get_stats():
     elapsed = datetime.now() - start_time
-    speed = total_checked / max(elapsed.total_seconds(), 1)
-    
+    speed = get_current_speed()
+
     with lock:
         return jsonify({
             'total_checked': total_checked,
             'total_found': total_found,
             'total_eth': round(total_eth_found, 8),
             'uptime': str(elapsed).split('.')[0],
-            'speed': round(speed, 2),
+            'speed': speed,
             'rpc_status': rpc_status,
             'current_rpc': f"{len(RPC_LIST)} RPCs active",
             'logs': last_logs[:10],
