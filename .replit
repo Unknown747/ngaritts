@@ -4,7 +4,7 @@ modules = ["python-3.12", "web"]
 router = "application"
 deploymentTarget = "vm"
 run = ["gunicorn", "--bind=0.0.0.0:5000", "--workers=1", "--threads=4", "--timeout=120", "main:app"]
-build = ["bash", "-c", '''mkdir -p /usr/local/bin && printf '#!/bin/bash\nexit 0\n' > /usr/local/bin/pnpm && chmod +x /usr/local/bin/pnpm && pip install -r requirements.txt''']
+build = ["bash", "-c", '''mkdir -p $HOME/.local/bin && printf '#!/bin/bash\nexit 0\n' > $HOME/.local/bin/pnpm && chmod +x $HOME/.local/bin/pnpm && export PATH=$HOME/.local/bin:$PATH && pip install -r requirements.txt''']
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]

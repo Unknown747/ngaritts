@@ -31,24 +31,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CHECK_DELAY = float(os.getenv("CHECK_DELAY", "1.0"))
 NUM_THREADS = int(os.getenv("NUM_THREADS", "2"))
-
-# ============ CPU PROTECTION ============
 CPU_MAX_PERCENT = float(os.getenv("CPU_MAX_PERCENT", "70"))
-CPU_CHECK_INTERVAL = 5  # detik antar cek CPU
-
-def cpu_guard():
-    """Background thread: throttle workers jika CPU melebihi batas."""
-    global running
-    while running:
-        try:
-            usage = psutil.cpu_percent(interval=1)
-            if usage > CPU_MAX_PERCENT:
-                add_log(f"⚠️ CPU {usage:.0f}% > {CPU_MAX_PERCENT:.0f}% — throttling...")
-                time.sleep(CPU_CHECK_INTERVAL)
-            else:
-                time.sleep(CPU_CHECK_INTERVAL)
-        except Exception:
-            time.sleep(CPU_CHECK_INTERVAL)
+CPU_CHECK_INTERVAL = 5
 
 # ============ VARIABEL GLOBAL ============
 total_checked = 0
@@ -65,15 +49,23 @@ log_lock = threading.Lock()
 price_lock = threading.Lock()
 status_lock = threading.Lock()
 
-# Sliding window speed real-time — deque capped agar tidak memory leak
 SPEED_WINDOW_SECS = 10
 speed_window = deque()
 speed_lock = threading.Lock()
 
+# ============ FUNGSI UTILITY ============
+def add_log(message, is_error=False):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_entry = f"[{timestamp}] {message}"
+    with log_lock:
+        last_logs.insert(0, log_entry)
+        if len(last_logs) > 20:
+            last_logs.pop()
+    print(log_entry)
+
 def record_check():
     with speed_lock:
         speed_window.append(time.time())
-        # Buang yang lebih lama dari window setiap 1000 entri agar tidak unbounded
         if len(speed_window) > 50000:
             now = time.time()
             while speed_window and speed_window[0] < now - SPEED_WINDOW_SECS:
@@ -86,7 +78,6 @@ def get_current_speed():
         while speed_window and speed_window[0] < cutoff:
             speed_window.popleft()
         count = len(speed_window)
-        # Hitung berdasar rentang data sebenarnya, bukan selalu 10 detik
         if count == 0:
             return 0.0
         oldest = speed_window[0]
@@ -95,12 +86,10 @@ def get_current_speed():
             return 0.0
         return round(count / elapsed, 1)
 
+# ============ HTTP SESSION ============
 def _make_session():
     session = requests.Session()
     session.headers.update({"Content-Type": "application/json"})
-    # connect=0 dan read=0 agar TIDAK retry pada timeout/connection error
-    # (5s timeout × 3 retry = 15s blocked per request — mematikan throughput)
-    # Hanya retry pada HTTP 5xx yang bisa recover (502/503/504)
     retry = Retry(
         total=2,
         connect=0,
@@ -117,6 +106,7 @@ def _make_session():
     return session
 
 _price_session = requests.Session()
+_telegram_session = _make_session()
 
 # ============ PER-THREAD RPC MANAGER ============
 class RPCManager:
@@ -131,11 +121,12 @@ class RPCManager:
         return self._rpcs[self._index]
 
     def next(self):
-        global rpc_status
         self._index = (self._index + 1) % len(self._rpcs)
         self._errors = 0
         with status_lock:
-            rpc_status = f"Active ({len(self._rpcs)} RPCs)"
+            rpc_status_val = f"Active ({len(self._rpcs)} RPCs)"
+        global rpc_status
+        rpc_status = rpc_status_val
 
     def on_error(self):
         self._errors += 1
@@ -167,7 +158,7 @@ class RPCManager:
                 self.on_error()
         return None
 
-# Load saved data
+# ============ PERSISTENSI ============
 FOUND_FILE = "found_wallets.json"
 PROGRESS_FILE = "progress.json"
 
@@ -183,36 +174,31 @@ def load_saved_data():
             with open(PROGRESS_FILE, 'r') as f:
                 data = json.load(f)
                 total_checked = data.get('total_checked', 0)
-    except:
+    except Exception:
         pass
 
 def save_found():
-    # [:100] = 100 terbaru (insert di index 0, jadi terbaru ada di depan)
     with lock:
         snapshot = list(found_wallets[:100])
-    with open(FOUND_FILE, 'w') as f:
-        json.dump(snapshot, f, indent=2)
+    try:
+        with open(FOUND_FILE, 'w') as f:
+            json.dump(snapshot, f, indent=2)
+    except Exception as e:
+        add_log(f"❌ Gagal save found_wallets: {e}")
 
 def save_progress():
     with lock:
         checked = total_checked
-    with open(PROGRESS_FILE, 'w') as f:
-        json.dump({'total_checked': checked}, f)
+    try:
+        with open(PROGRESS_FILE, 'w') as f:
+            json.dump({'total_checked': checked}, f)
+    except Exception as e:
+        add_log(f"❌ Gagal save progress: {e}")
 
-def add_log(message, is_error=False):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    log_entry = f"[{timestamp}] {message}"
-    with log_lock:
-        last_logs.insert(0, log_entry)
-        if len(last_logs) > 20:
-            last_logs.pop()
-    print(log_entry)
-
-_telegram_session = _make_session()
-
+# ============ TELEGRAM ============
 def send_telegram_notification(wallet_data):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        add_log("⚠️ Telegram not configured! Found wallet but no notification sent.")
+        add_log("⚠️ Telegram tidak dikonfigurasi!")
         return
 
     message = (
@@ -237,11 +223,14 @@ def send_telegram_notification(wallet_data):
     try:
         response = _telegram_session.post(url, json=payload, timeout=10)
         if response.status_code == 200:
-            add_log(f"✅ Telegram notification sent for {wallet_data['address'][:10]}...")
+            add_log(f"✅ Telegram terkirim: {wallet_data['address'][:10]}...")
         else:
-            add_log(f"❌ Telegram failed: {response.text[:80]}")
+            add_log(f"❌ Telegram gagal: {response.text[:80]}")
     except Exception as e:
         add_log(f"❌ Telegram error: {str(e)}")
+
+# ============ ETH PRICE ============
+eth_price_cache = {"price": 3000, "updated": 0}
 
 def get_eth_price():
     try:
@@ -254,47 +243,54 @@ def get_eth_price():
             return data['ethereum']['usd']
     except Exception:
         pass
-    return 3000  # fallback price
+    return 3000
 
+def get_cached_eth_price():
+    now = time.time()
+    with price_lock:
+        if now - eth_price_cache["updated"] <= 60:
+            return eth_price_cache["price"]
+        eth_price_cache["updated"] = now
+    price = get_eth_price()
+    with price_lock:
+        eth_price_cache["price"] = price
+    return price
+
+# ============ WALLET GENERATOR ============
 def generate_random_wallet():
     private_key_bytes = os.urandom(32)
     private_key_hex = private_key_bytes.hex()
     acct = Account.from_key(private_key_bytes)
-    address = acct.address
-    return private_key_hex, address
+    return private_key_hex, acct.address
 
 def check_balance(address, rpc):
     result = rpc.request("eth_getBalance", [address, "latest"])
     if result is not None:
         try:
             return int(result, 16) / 10**18
-        except:
+        except Exception:
             return None
     return None
 
-eth_price_cache = {"price": 3000, "updated": 0}
+# ============ CPU GUARD ============
+def cpu_guard():
+    while running:
+        try:
+            usage = psutil.cpu_percent(interval=1)
+            if usage > CPU_MAX_PERCENT:
+                add_log(f"⚠️ CPU {usage:.0f}% > {CPU_MAX_PERCENT:.0f}% — throttling...")
+            time.sleep(CPU_CHECK_INTERVAL)
+        except Exception:
+            time.sleep(CPU_CHECK_INTERVAL)
 
-def get_cached_eth_price():
-    now = time.time()
-    with price_lock:
-        if now - eth_price_cache["updated"] > 60:
-            eth_price_cache["updated"] = now  # set dulu agar thread lain tidak ikut fetch
-        else:
-            return eth_price_cache["price"]
-    price = get_eth_price()
-    with price_lock:
-        eth_price_cache["price"] = price
-    return price
-
+# ============ WORKER ============
 def brute_worker(thread_id):
-    global total_checked, total_found, total_eth_found, last_found, running
+    global total_checked, total_found, total_eth_found, last_found
 
     rpc = RPCManager()
-    consecutive_errors = 0
 
     while running:
         try:
-            # CPU protection: pause worker jika CPU melebihi batas
             cpu_usage = psutil.cpu_percent(interval=None)
             if cpu_usage > CPU_MAX_PERCENT:
                 time.sleep(1.0)
@@ -308,9 +304,6 @@ def brute_worker(thread_id):
                 checked_now = total_checked
 
             record_check()
-
-            if balance is not None:
-                consecutive_errors = 0  # RPC sukses — reset error counter
 
             if balance is not None and balance > 0:
                 eth_price = get_cached_eth_price()
@@ -344,9 +337,6 @@ def brute_worker(thread_id):
 
         except Exception as e:
             add_log(f"Worker[{thread_id}] error: {str(e)}", True)
-            consecutive_errors += 1
-            if consecutive_errors > 10:
-                consecutive_errors = 0
             time.sleep(1)
 
 # ============ FLASK ROUTES ============
@@ -384,12 +374,11 @@ def get_stats():
 
     return jsonify(snapshot)
 
-# ============ MAIN ============
-if __name__ == '__main__':
+# ============ INIT — jalan saat import (gunicorn) MAUPUN direct run ============
+def _startup():
     load_saved_data()
     add_log(f"📊 Loaded: {total_checked} checked, {total_found} found")
-    
-    # Start CPU guard
+
     cg = threading.Thread(target=cpu_guard, daemon=True)
     cg.start()
     add_log(f"🛡️ CPU guard aktif (max {CPU_MAX_PERCENT:.0f}%)")
@@ -398,7 +387,9 @@ if __name__ == '__main__':
     for i in range(NUM_THREADS):
         t = threading.Thread(target=brute_worker, args=(i,), daemon=True)
         t.start()
-    
-    # Run Flask app
+
+_startup()
+
+if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
