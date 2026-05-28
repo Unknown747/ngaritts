@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11"]
+modules = ["python-3.12", "web"]
 
 [deployment]
 router = "application"
@@ -33,7 +33,7 @@ args = "python main.py"
 waitForPort = 5000
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
