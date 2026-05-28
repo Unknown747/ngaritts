@@ -29,8 +29,8 @@ RPC_LIST = [
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CHECK_DELAY = float(os.getenv("CHECK_DELAY", "0.5"))
-NUM_THREADS = int(os.getenv("NUM_THREADS", "3"))
+CHECK_DELAY = float(os.getenv("CHECK_DELAY", "1.0"))
+NUM_THREADS = int(os.getenv("NUM_THREADS", "2"))
 
 # ============ CPU PROTECTION ============
 CPU_MAX_PERCENT = float(os.getenv("CPU_MAX_PERCENT", "70"))
