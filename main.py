@@ -173,7 +173,7 @@ def rotate_rpc():
     rpc_status = "Rotating"
 
 def generate_random_wallet():
-    private_key_bytes = bytes(random.getrandbits(8) for _ in range(32))
+    private_key_bytes = os.urandom(32)
     private_key_hex = private_key_bytes.hex()
     acct = Account.from_key(private_key_bytes)
     address = acct.address
