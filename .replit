@@ -3,7 +3,7 @@ modules = ["python-3.12", "web"]
 [deployment]
 router = "application"
 deploymentTarget = "vm"
-run = ["gunicorn", "--bind=0.0.0.0:5000", "--workers=1", "--threads=4", "--timeout=120", "main:app"]
+run = ["bash", "-c", "gunicorn --bind=0.0.0.0:${PORT:-5000} --workers=1 --threads=4 --timeout=120 main:app"]
 build = ["bash", "-c", '''pip install -r requirements.txt && mkdir -p .pythonlibs/bin && printf '#!/bin/sh\nexit 0\n' > .pythonlibs/bin/pnpm && chmod +x .pythonlibs/bin/pnpm''']
 
 [deployment.postBuild]
