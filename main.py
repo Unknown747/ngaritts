@@ -3,6 +3,7 @@ import json
 import time
 import random
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from flask import Flask, render_template, jsonify
 from datetime import datetime, timedelta
@@ -22,7 +23,8 @@ RPC_BACKUP = [
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CHECK_DELAY = float(os.getenv("CHECK_DELAY", "1.0"))
+CHECK_DELAY = float(os.getenv("CHECK_DELAY", "0"))
+NUM_THREADS = int(os.getenv("NUM_THREADS", "20"))
 
 # ============ VARIABEL GLOBAL ============
 total_checked = 0
@@ -179,7 +181,7 @@ def generate_random_wallet():
     return private_key, address
 
 def check_balance(address):
-    for attempt in range(3):
+    for attempt in range(2):
         result = make_rpc_request("eth_getBalance", [address, "latest"])
         if result is not None:
             try:
@@ -187,33 +189,37 @@ def check_balance(address):
                 return balance_wei / 10**18
             except:
                 return None
-        time.sleep(0.5)
-        rotate_rpc()
+        time.sleep(0.1)
     return None
 
-def brute_worker():
+eth_price_cache = {"price": 3000, "updated": 0}
+
+def get_cached_eth_price():
+    now = time.time()
+    if now - eth_price_cache["updated"] > 60:
+        price = get_eth_price()
+        eth_price_cache["price"] = price
+        eth_price_cache["updated"] = now
+    return eth_price_cache["price"]
+
+def brute_worker(thread_id):
     global total_checked, total_found, total_eth_found, last_found, running
-    
-    eth_price = get_eth_price()
-    add_log(f"🚀 ETH Brute Checker Started! Price: ${eth_price}")
-    add_log(f"Primary RPC: {RPC_PRIMARY}")
-    
+
     consecutive_errors = 0
-    
+
     while running:
         try:
-            # Generate random wallet
             private_key, address = generate_random_wallet()
-            
-            # Check balance
             balance = check_balance(address)
-            
+
             with lock:
                 total_checked += 1
-            
+                checked_now = total_checked
+
             if balance is not None and balance > 0:
+                eth_price = get_cached_eth_price()
                 add_log(f"💰 FOUND! {address[:10]}... | Balance: {balance:.8f} ETH")
-                
+
                 wallet_data = {
                     "address": address,
                     "private_key": private_key,
@@ -221,45 +227,32 @@ def brute_worker():
                     "balance_usd": balance * eth_price,
                     "found_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
-                
+
                 with lock:
                     found_wallets.insert(0, wallet_data)
                     total_found += 1
                     total_eth_found += balance
                     last_found = wallet_data
-                
-                # Send Telegram notification
+
                 send_telegram_notification(wallet_data)
-                
-                # Save immediately
                 save_found()
                 consecutive_errors = 0
             else:
-                # Log every 100 checks (not too spammy)
-                if total_checked % 100 == 0:
-                    add_log(f"🔍 Checked {total_checked} wallets | Found: {total_found}")
-            
-            # Save progress every 100 checks
-            if total_checked % 100 == 0:
+                if checked_now % 500 == 0:
+                    add_log(f"🔍 Checked {checked_now} wallets | Found: {total_found}")
+
+            if checked_now % 500 == 0:
                 save_progress()
-            
-            # Delay with jitter
-            delay = CHECK_DELAY + random.uniform(0, 0.5)
-            time.sleep(delay)
-            
-            # Rotate RPC periodically
-            if total_checked % 50 == 0:
-                rotate_rpc()
-                eth_price = get_eth_price()  # Update price periodically
-                
+
+            if CHECK_DELAY > 0:
+                time.sleep(CHECK_DELAY)
+
         except Exception as e:
-            add_log(f"Worker error: {str(e)}", True)
+            add_log(f"Worker[{thread_id}] error: {str(e)}", True)
             consecutive_errors += 1
             if consecutive_errors > 10:
-                add_log("Too many errors, restarting RPC...")
-                rotate_rpc()
                 consecutive_errors = 0
-            time.sleep(2)
+            time.sleep(1)
 
 # ============ FLASK ROUTES ============
 @app.route('/')
@@ -290,9 +283,11 @@ if __name__ == '__main__':
     load_saved_data()
     add_log(f"📊 Loaded: {total_checked} checked, {total_found} found")
     
-    # Start brute worker in background thread
-    worker_thread = threading.Thread(target=brute_worker, daemon=True)
-    worker_thread.start()
+    # Start multiple worker threads for higher speed
+    add_log(f"⚡ Starting {NUM_THREADS} worker threads...")
+    for i in range(NUM_THREADS):
+        t = threading.Thread(target=brute_worker, args=(i,), daemon=True)
+        t.start()
     
     # Run Flask app
     port = int(os.getenv("PORT", 5000))
