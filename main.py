@@ -79,17 +79,25 @@ def get_current_speed():
 def _make_session():
     session = requests.Session()
     session.headers.update({"Content-Type": "application/json"})
+    # connect=0 dan read=0 agar TIDAK retry pada timeout/connection error
+    # (5s timeout × 3 retry = 15s blocked per request — mematikan throughput)
+    # Hanya retry pada HTTP 5xx yang bisa recover (502/503/504)
     retry = Retry(
         total=2,
-        backoff_factor=0.3,
-        status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["POST"],
+        connect=0,
+        read=0,
+        status=2,
+        backoff_factor=0.2,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=["POST", "GET"],
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=20)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
+
+_price_session = requests.Session()
 
 # ============ PER-THREAD RPC MANAGER ============
 class RPCManager:
@@ -104,10 +112,10 @@ class RPCManager:
         return self._rpcs[self._index]
 
     def next(self):
+        global rpc_status
         self._index = (self._index + 1) % len(self._rpcs)
         self._errors = 0
         with status_lock:
-            global rpc_status
             rpc_status = f"Active ({len(self._rpcs)} RPCs)"
 
     def on_error(self):
@@ -133,7 +141,7 @@ class RPCManager:
                     self.on_error()
                 elif resp.status_code == 429:
                     self.next()
-                    time.sleep(0.5)
+                    time.sleep(random.uniform(0.1, 0.3))
                 else:
                     self.on_error()
             except Exception:
@@ -160,8 +168,9 @@ def load_saved_data():
         pass
 
 def save_found():
+    # [:100] = 100 terbaru (insert di index 0, jadi terbaru ada di depan)
     with lock:
-        snapshot = list(found_wallets[-100:])
+        snapshot = list(found_wallets[:100])
     with open(FOUND_FILE, 'w') as f:
         json.dump(snapshot, f, indent=2)
 
@@ -217,10 +226,14 @@ def send_telegram_notification(wallet_data):
 
 def get_eth_price():
     try:
-        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", timeout=5)
+        response = _price_session.get(
+            "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
+            timeout=5
+        )
         if response.status_code == 200:
-            return response.json()['ethereum']['usd']
-    except:
+            data = response.json()
+            return data['ethereum']['usd']
+    except Exception:
         pass
     return 3000  # fallback price
 
@@ -271,6 +284,9 @@ def brute_worker(thread_id):
 
             record_check()
 
+            if balance is not None:
+                consecutive_errors = 0  # RPC sukses — reset error counter
+
             if balance is not None and balance > 0:
                 eth_price = get_cached_eth_price()
                 add_log(f"💰 FOUND! {address[:10]}... | Balance: {balance:.8f} ETH")
@@ -291,7 +307,6 @@ def brute_worker(thread_id):
 
                 send_telegram_notification(wallet_data)
                 save_found()
-                consecutive_errors = 0
             else:
                 if checked_now % 500 == 0:
                     add_log(f"🔍 Checked {checked_now} wallets | Found: {total_found}")
