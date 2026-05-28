@@ -17,11 +17,13 @@ load_dotenv()
 app = Flask(__name__)
 
 # ============ KONFIGURASI ============
-RPC_PRIMARY = os.getenv("RPC_PRIMARY_URL", "http://202.61.239.89:8545")
-RPC_BACKUP = [
-    "https://eth.llamarpc.com",
-    "https://rpc.ankr.com/eth",
-    "https://cloudflare-eth.com"
+RPC_LIST = [
+    "https://eth.drpc.org",
+    "https://ethereum.publicnode.com",
+    "https://mainnet.gateway.tenderly.co",
+    "https://eth-mainnet.public.blastapi.io",
+    "https://1rpc.io/eth",
+    "https://rpc.flashbots.net",
 ]
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -34,13 +36,58 @@ total_checked = 0
 total_found = 0
 total_eth_found = 0.0
 start_time = datetime.now()
-current_rpc = RPC_PRIMARY
 rpc_status = "Online"
 last_logs = []
 found_wallets = []
 last_found = None
 running = True
 lock = threading.Lock()
+
+# ============ PER-THREAD RPC MANAGER ============
+class RPCManager:
+    def __init__(self):
+        self._rpcs = list(RPC_LIST)
+        self._index = random.randint(0, len(self._rpcs) - 1)
+        self._errors = 0
+
+    @property
+    def current(self):
+        return self._rpcs[self._index]
+
+    def next(self):
+        self._index = (self._index + 1) % len(self._rpcs)
+        self._errors = 0
+
+    def on_error(self):
+        self._errors += 1
+        if self._errors >= 3:
+            self.next()
+
+    def request(self, method, params):
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": random.randint(1, 10000)
+        }
+        headers = {"Content-Type": "application/json"}
+        for _ in range(len(self._rpcs)):
+            try:
+                resp = requests.post(self.current, json=payload, headers=headers, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "error" not in data:
+                        self._errors = 0
+                        return data.get("result")
+                    self.on_error()
+                elif resp.status_code == 429:
+                    self.next()
+                    time.sleep(0.5)
+                else:
+                    self.on_error()
+            except Exception:
+                self.on_error()
+        return None
 
 # Load saved data
 FOUND_FILE = "found_wallets.json"
@@ -125,53 +172,6 @@ def get_eth_price():
         pass
     return 3000  # fallback price
 
-def make_rpc_request(method, params):
-    global current_rpc, rpc_status
-    
-    payload = {
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params,
-        "id": random.randint(1, 10000)
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": random.choice([
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
-        ])
-    }
-    
-    try:
-        response = requests.post(current_rpc, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if "error" in data:
-                return None
-            rpc_status = "Online"
-            return data.get("result")
-        elif response.status_code == 429:
-            add_log("⚠️ Rate limit hit, waiting...")
-            time.sleep(5)
-            return None
-        else:
-            return None
-    except Exception as e:
-        add_log(f"RPC error: {str(e)[:50]}")
-        return None
-
-def rotate_rpc():
-    global current_rpc, rpc_status
-    if current_rpc == RPC_PRIMARY:
-        current_rpc = random.choice(RPC_BACKUP)
-        add_log(f"Switched to backup RPC: {current_rpc[:30]}...")
-    else:
-        # Try to switch back to primary
-        current_rpc = RPC_PRIMARY
-        add_log(f"Switched back to primary RPC")
-    rpc_status = "Rotating"
-
 def generate_random_wallet():
     private_key_bytes = os.urandom(32)
     private_key_hex = private_key_bytes.hex()
@@ -179,16 +179,13 @@ def generate_random_wallet():
     address = acct.address
     return private_key_hex, address
 
-def check_balance(address):
-    for attempt in range(2):
-        result = make_rpc_request("eth_getBalance", [address, "latest"])
-        if result is not None:
-            try:
-                balance_wei = int(result, 16)
-                return balance_wei / 10**18
-            except:
-                return None
-        time.sleep(0.1)
+def check_balance(address, rpc):
+    result = rpc.request("eth_getBalance", [address, "latest"])
+    if result is not None:
+        try:
+            return int(result, 16) / 10**18
+        except:
+            return None
     return None
 
 eth_price_cache = {"price": 3000, "updated": 0}
@@ -204,12 +201,13 @@ def get_cached_eth_price():
 def brute_worker(thread_id):
     global total_checked, total_found, total_eth_found, last_found, running
 
-    consecutive_errors = 0
+    rpc = RPCManager()
+    add_log(f"🔌 Thread[{thread_id}] started → RPC: {rpc.current[:30]}...")
 
     while running:
         try:
             private_key, address = generate_random_wallet()
-            balance = check_balance(address)
+            balance = check_balance(address, rpc)
 
             with lock:
                 total_checked += 1
@@ -271,7 +269,7 @@ def get_stats():
             'uptime': str(elapsed).split('.')[0],
             'speed': round(speed, 2),
             'rpc_status': rpc_status,
-            'current_rpc': current_rpc[:50] + "..." if len(current_rpc) > 50 else current_rpc,
+            'current_rpc': f"{len(RPC_LIST)} RPCs active",
             'logs': last_logs[:10],
             'last_found': last_found,
             'recent_found': found_wallets[:5]
