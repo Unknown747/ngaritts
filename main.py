@@ -3,7 +3,10 @@ import json
 import time
 import random
 import threading
+from collections import deque
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from eth_account import Account
 from flask import Flask, render_template, jsonify
 from datetime import datetime
@@ -39,22 +42,54 @@ found_wallets = []
 last_found = None
 running = True
 lock = threading.Lock()
+log_lock = threading.Lock()
+price_lock = threading.Lock()
+status_lock = threading.Lock()
 
-# Sliding window untuk speed real-time (10 detik)
-speed_window = []
+# Sliding window speed real-time — deque capped agar tidak memory leak
+SPEED_WINDOW_SECS = 10
+speed_window = deque()
 speed_lock = threading.Lock()
 
 def record_check():
     with speed_lock:
         speed_window.append(time.time())
+        # Buang yang lebih lama dari window setiap 1000 entri agar tidak unbounded
+        if len(speed_window) > 50000:
+            now = time.time()
+            while speed_window and speed_window[0] < now - SPEED_WINDOW_SECS:
+                speed_window.popleft()
 
 def get_current_speed():
     now = time.time()
+    cutoff = now - SPEED_WINDOW_SECS
     with speed_lock:
-        recent = [t for t in speed_window if now - t <= 10]
-        speed_window.clear()
-        speed_window.extend(recent)
-        return round(len(recent) / 10, 1)
+        while speed_window and speed_window[0] < cutoff:
+            speed_window.popleft()
+        count = len(speed_window)
+        # Hitung berdasar rentang data sebenarnya, bukan selalu 10 detik
+        if count == 0:
+            return 0.0
+        oldest = speed_window[0]
+        elapsed = now - oldest
+        if elapsed < 0.5:
+            return 0.0
+        return round(count / elapsed, 1)
+
+def _make_session():
+    session = requests.Session()
+    session.headers.update({"Content-Type": "application/json"})
+    retry = Retry(
+        total=2,
+        backoff_factor=0.3,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 # ============ PER-THREAD RPC MANAGER ============
 class RPCManager:
@@ -62,8 +97,7 @@ class RPCManager:
         self._rpcs = list(RPC_LIST)
         self._index = random.randint(0, len(self._rpcs) - 1)
         self._errors = 0
-        self._session = requests.Session()
-        self._session.headers.update({"Content-Type": "application/json"})
+        self._session = _make_session()
 
     @property
     def current(self):
@@ -72,16 +106,14 @@ class RPCManager:
     def next(self):
         self._index = (self._index + 1) % len(self._rpcs)
         self._errors = 0
-        self._update_global_status()
+        with status_lock:
+            global rpc_status
+            rpc_status = f"Active ({len(self._rpcs)} RPCs)"
 
     def on_error(self):
         self._errors += 1
         if self._errors >= 3:
             self.next()
-
-    def _update_global_status(self):
-        global rpc_status
-        rpc_status = f"Active ({len(self._rpcs)} RPCs)"
 
     def request(self, method, params):
         payload = {
@@ -142,31 +174,30 @@ def save_progress():
 def add_log(message, is_error=False):
     timestamp = datetime.now().strftime("%H:%M:%S")
     log_entry = f"[{timestamp}] {message}"
-    with lock:
+    with log_lock:
         last_logs.insert(0, log_entry)
         if len(last_logs) > 20:
             last_logs.pop()
     print(log_entry)
 
+_telegram_session = _make_session()
+
 def send_telegram_notification(wallet_data):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         add_log("⚠️ Telegram not configured! Found wallet but no notification sent.")
         return
-    
-    message = f"""
-🚨 *ETH WALLET FOUND!* 🚨
 
-📍 *Address:* `{wallet_data['address']}`
-🔑 *Private Key:* `{wallet_data['private_key']}`
-💰 *Balance:* `{wallet_data['balance_eth']:.8f} ETH`
-💵 *Value:* `${wallet_data['balance_usd']:.2f}` (est)
-⏰ *Time:* `{wallet_data['found_time']}`
+    message = (
+        f"🚨 *ETH WALLET FOUND!* 🚨\n\n"
+        f"📍 *Address:* `{wallet_data['address']}`\n"
+        f"🔑 *Private Key:* `{wallet_data['private_key']}`\n"
+        f"💰 *Balance:* `{wallet_data['balance_eth']:.8f} ETH`\n"
+        f"💵 *Value:* `${wallet_data['balance_usd']:.2f}` (est)\n"
+        f"⏰ *Time:* `{wallet_data['found_time']}`\n\n"
+        f"🔗 [View on Etherscan](https://etherscan.io/address/{wallet_data['address']})\n\n"
+        f"⚠️ *Keep this private key secure!*"
+    )
 
-🔗 [View on Etherscan](https://etherscan.io/address/{wallet_data['address']})
-
-⚠️ *Keep this private key secure!*
-"""
-    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -174,13 +205,13 @@ def send_telegram_notification(wallet_data):
         "parse_mode": "Markdown",
         "disable_web_page_preview": False
     }
-    
+
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = _telegram_session.post(url, json=payload, timeout=10)
         if response.status_code == 200:
             add_log(f"✅ Telegram notification sent for {wallet_data['address'][:10]}...")
         else:
-            add_log(f"❌ Telegram failed: {response.text}")
+            add_log(f"❌ Telegram failed: {response.text[:80]}")
     except Exception as e:
         add_log(f"❌ Telegram error: {str(e)}")
 
@@ -213,11 +244,15 @@ eth_price_cache = {"price": 3000, "updated": 0}
 
 def get_cached_eth_price():
     now = time.time()
-    if now - eth_price_cache["updated"] > 60:
-        price = get_eth_price()
+    with price_lock:
+        if now - eth_price_cache["updated"] > 60:
+            eth_price_cache["updated"] = now  # set dulu agar thread lain tidak ikut fetch
+        else:
+            return eth_price_cache["price"]
+    price = get_eth_price()
+    with price_lock:
         eth_price_cache["price"] = price
-        eth_price_cache["updated"] = now
-    return eth_price_cache["price"]
+    return price
 
 def brute_worker(thread_id):
     global total_checked, total_found, total_eth_found, last_found, running
@@ -285,18 +320,24 @@ def get_stats():
     speed = get_current_speed()
 
     with lock:
-        return jsonify({
+        snapshot = {
             'total_checked': total_checked,
             'total_found': total_found,
             'total_eth': round(total_eth_found, 8),
             'uptime': str(elapsed).split('.')[0],
             'speed': speed,
-            'rpc_status': rpc_status,
-            'current_rpc': f"{len(RPC_LIST)} RPCs active",
-            'logs': last_logs[:10],
             'last_found': last_found,
             'recent_found': found_wallets[:5]
-        })
+        }
+
+    with status_lock:
+        snapshot['rpc_status'] = rpc_status
+        snapshot['current_rpc'] = f"{len(RPC_LIST)} RPCs active"
+
+    with log_lock:
+        snapshot['logs'] = list(last_logs[:10])
+
+    return jsonify(snapshot)
 
 # ============ MAIN ============
 if __name__ == '__main__':
