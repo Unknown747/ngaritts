@@ -11,6 +11,7 @@ from eth_account import Account
 from flask import Flask, render_template, jsonify
 from datetime import datetime
 from dotenv import load_dotenv
+import psutil
 
 load_dotenv()
 
@@ -28,8 +29,26 @@ RPC_LIST = [
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CHECK_DELAY = float(os.getenv("CHECK_DELAY", "0"))
-NUM_THREADS = int(os.getenv("NUM_THREADS", "20"))
+CHECK_DELAY = float(os.getenv("CHECK_DELAY", "0.5"))
+NUM_THREADS = int(os.getenv("NUM_THREADS", "3"))
+
+# ============ CPU PROTECTION ============
+CPU_MAX_PERCENT = float(os.getenv("CPU_MAX_PERCENT", "70"))
+CPU_CHECK_INTERVAL = 5  # detik antar cek CPU
+
+def cpu_guard():
+    """Background thread: throttle workers jika CPU melebihi batas."""
+    global running
+    while running:
+        try:
+            usage = psutil.cpu_percent(interval=1)
+            if usage > CPU_MAX_PERCENT:
+                add_log(f"⚠️ CPU {usage:.0f}% > {CPU_MAX_PERCENT:.0f}% — throttling...")
+                time.sleep(CPU_CHECK_INTERVAL)
+            else:
+                time.sleep(CPU_CHECK_INTERVAL)
+        except Exception:
+            time.sleep(CPU_CHECK_INTERVAL)
 
 # ============ VARIABEL GLOBAL ============
 total_checked = 0
@@ -275,6 +294,12 @@ def brute_worker(thread_id):
 
     while running:
         try:
+            # CPU protection: pause worker jika CPU melebihi batas
+            cpu_usage = psutil.cpu_percent(interval=None)
+            if cpu_usage > CPU_MAX_PERCENT:
+                time.sleep(1.0)
+                continue
+
             private_key, address = generate_random_wallet()
             balance = check_balance(address, rpc)
 
@@ -334,6 +359,11 @@ def get_stats():
     elapsed = datetime.now() - start_time
     speed = get_current_speed()
 
+    def _safe_wallet(w):
+        if w is None:
+            return None
+        return {k: v for k, v in w.items() if k != 'private_key'}
+
     with lock:
         snapshot = {
             'total_checked': total_checked,
@@ -341,8 +371,8 @@ def get_stats():
             'total_eth': round(total_eth_found, 8),
             'uptime': str(elapsed).split('.')[0],
             'speed': speed,
-            'last_found': last_found,
-            'recent_found': found_wallets[:5]
+            'last_found': _safe_wallet(last_found),
+            'recent_found': [_safe_wallet(w) for w in found_wallets[:5]]
         }
 
     with status_lock:
@@ -359,7 +389,11 @@ if __name__ == '__main__':
     load_saved_data()
     add_log(f"📊 Loaded: {total_checked} checked, {total_found} found")
     
-    # Start multiple worker threads for higher speed
+    # Start CPU guard
+    cg = threading.Thread(target=cpu_guard, daemon=True)
+    cg.start()
+    add_log(f"🛡️ CPU guard aktif (max {CPU_MAX_PERCENT:.0f}%)")
+
     add_log(f"⚡ Starting {NUM_THREADS} worker threads...")
     for i in range(NUM_THREADS):
         t = threading.Thread(target=brute_worker, args=(i,), daemon=True)
