@@ -60,34 +60,7 @@
                 <div class="stat-info">
                     <span class="stat-label">RPC Status</span>
                     <span class="stat-value" id="rpcStatus">Online</span>
-                    <span class="stat-unit" id="rpcUrl"></span>
                 </div>
-            </div>
-        </div>
-
-        <div class="last-found-section">
-            <h2>🔥 Last Found Wallet</h2>
-            <div id="lastFound" class="last-found-card">
-                <div class="empty-message">No wallet found yet...</div>
-            </div>
-        </div>
-
-        <div class="recent-section">
-            <h2>📋 Recent Found Wallets</h2>
-            <div class="table-container">
-                <table id="recentTable">
-                    <thead>
-                        <tr>
-                            <th>Address</th>
-                            <th>Balance (ETH)</th>
-                            <th>Value (USD)</th>
-                            <th>Time</th>
-                        </tr>
-                    </thead>
-                    <tbody id="recentTableBody">
-                        <tr><td colspan="4" class="empty-row">No wallets found yet</td></tr>
-                    </tbody>
-                </table>
             </div>
         </div>
 
@@ -113,11 +86,6 @@
             return eth.toFixed(8);
         }
 
-        function shortenAddress(addr) {
-            if (!addr || addr.length < 15) return addr;
-            return addr.substring(0, 8) + '...' + addr.substring(addr.length - 6);
-        }
-
         function fetchStats() {
             fetch('/api/stats')
                 .then(response => response.json())
@@ -128,51 +96,7 @@
                     document.getElementById('speed').innerText = data.speed;
                     document.getElementById('uptime').innerText = data.uptime;
                     document.getElementById('rpcStatus').innerHTML = data.rpc_status;
-                    
-                    const rpcUrlElem = document.getElementById('rpcUrl');
-                    if (data.current_rpc) {
-                        rpcUrlElem.innerText = data.current_rpc.substring(0, 30);
-                    }
-                    
-                    // Update last found
-                    const lastFoundDiv = document.getElementById('lastFound');
-                    if (data.last_found) {
-                        lastFoundDiv.innerHTML = `
-                            <div class="found-details">
-                                <div class="detail-row">
-                                    <span class="detail-label">Address:</span>
-                                    <code class="detail-value">${data.last_found.address}</code>
-                                </div>
-                                <div class="detail-row">
-                                    <span class="detail-label">Balance:</span>
-                                    <span class="detail-value highlight">${formatEth(data.last_found.balance_eth)} ETH</span>
-                                    <span class="detail-value">(~$${data.last_found.balance_usd.toFixed(2)})</span>
-                                </div>
-                                <div class="detail-row">
-                                    <span class="detail-label">Time:</span>
-                                    <span class="detail-value">${data.last_found.found_time}</span>
-                                </div>
-                            </div>
-                        `;
-                    } else {
-                        lastFoundDiv.innerHTML = '<div class="empty-message">No wallet found yet...</div>';
-                    }
-                    
-                    // Update recent table
-                    const tableBody = document.getElementById('recentTableBody');
-                    if (data.recent_found && data.recent_found.length > 0) {
-                        tableBody.innerHTML = data.recent_found.map(w => `
-                            <tr>
-                                <td><code class="address-code">${shortenAddress(w.address)}</code></td>
-                                <td class="eth-balance">${formatEth(w.balance_eth)} ETH</td>
-                                <td>$${w.balance_usd.toFixed(2)}</td>
-                                <td>${w.found_time.substring(5, 16)}</td>
-                            </tr>
-                        `).join('');
-                    } else {
-                        tableBody.innerHTML = '<tr><td colspan="4" class="empty-row">No wallets found yet</td></tr>';
-                    }
-                    
+
                     // Update logs
                     const logsContainer = document.getElementById('logsContainer');
                     if (data.logs && data.logs.length > 0) {
