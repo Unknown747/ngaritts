@@ -3,122 +3,220 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETH Brute Checker | Live Stats</title>
+    <title>ETH Brute Checker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <div class="bg-grid"></div>
+
     <div class="container">
-        <div class="header">
-            <h1>🔍 ETH Brute Checker <span class="badge">v3.0</span></h1>
-            <p class="subtitle">Educational Purpose Only - Mathematical Demonstration</p>
-        </div>
+
+        <header class="header">
+            <div class="header-left">
+                <div class="logo">
+                    <span class="logo-icon">⬡</span>
+                    <div>
+                        <h1>ETH Brute Checker</h1>
+                        <p class="subtitle">Ethereum Wallet Scanner</p>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="live-badge">
+                    <span class="live-dot"></span>
+                    LIVE
+                </div>
+                <div class="version-badge">v3.0</div>
+            </div>
+        </header>
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-icon">📊</div>
-                <div class="stat-info">
+                <div class="stat-top">
                     <span class="stat-label">Total Checked</span>
-                    <span class="stat-value" id="totalChecked">0</span>
+                    <span class="stat-icon-small">🔍</span>
                 </div>
+                <div class="stat-value" id="totalChecked">0</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" id="checkedBar"></div></div>
             </div>
-            
-            <div class="stat-card found">
-                <div class="stat-icon">💰</div>
-                <div class="stat-info">
-                    <span class="stat-label">Wallet Found</span>
-                    <span class="stat-value" id="totalFound">0</span>
+
+            <div class="stat-card card-found">
+                <div class="stat-top">
+                    <span class="stat-label">Wallets Found</span>
+                    <span class="stat-icon-small">💰</span>
                 </div>
+                <div class="stat-value green" id="totalFound">0</div>
+                <div class="stat-bar"><div class="stat-bar-fill green" style="width:0%"></div></div>
             </div>
-            
+
             <div class="stat-card">
-                <div class="stat-icon">💎</div>
-                <div class="stat-info">
+                <div class="stat-top">
                     <span class="stat-label">Total ETH</span>
-                    <span class="stat-value" id="totalEth">0.00000000</span>
+                    <span class="stat-icon-small">💎</span>
                 </div>
+                <div class="stat-value gold" id="totalEth">0.00000000</div>
+                <div class="stat-sub">ETH accumulated</div>
             </div>
-            
-            <div class="stat-card">
-                <div class="stat-icon">⚡</div>
-                <div class="stat-info">
+
+            <div class="stat-card card-speed">
+                <div class="stat-top">
                     <span class="stat-label">Speed</span>
-                    <span class="stat-value" id="speed">0</span>
+                    <span class="stat-icon-small">⚡</span>
+                </div>
+                <div class="stat-value-row">
+                    <span class="stat-value cyan" id="speed">0</span>
                     <span class="stat-unit">w/s</span>
                 </div>
+                <div class="speed-meter">
+                    <div class="speed-meter-fill" id="speedMeter"></div>
+                </div>
             </div>
-            
+
             <div class="stat-card">
-                <div class="stat-icon">⏱️</div>
-                <div class="stat-info">
+                <div class="stat-top">
                     <span class="stat-label">Uptime</span>
-                    <span class="stat-value" id="uptime">00:00:00</span>
+                    <span class="stat-icon-small">⏱️</span>
                 </div>
+                <div class="stat-value mono" id="uptime">00:00:00</div>
+                <div class="stat-sub">running continuously</div>
             </div>
-            
+
             <div class="stat-card">
-                <div class="stat-icon">🌐</div>
-                <div class="stat-info">
+                <div class="stat-top">
                     <span class="stat-label">RPC Status</span>
-                    <span class="stat-value" id="rpcStatus">Online</span>
+                    <span class="stat-icon-small">🌐</span>
+                </div>
+                <div class="rpc-status">
+                    <span class="rpc-dot"></span>
+                    <span class="stat-value-sm" id="rpcStatus">Online</span>
+                </div>
+                <div class="stat-sub" id="rpcDetail">—</div>
+            </div>
+        </div>
+
+        <div class="bottom-grid">
+            <div class="log-panel">
+                <div class="panel-header">
+                    <h2>Live Activity Log</h2>
+                    <span class="log-count" id="logCount">0 entries</span>
+                </div>
+                <div class="logs-container" id="logsContainer">
+                    <div class="log-entry log-info">
+                        <span class="log-time">--:--:--</span>
+                        <span class="log-msg">Waiting for data...</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <div class="panel-header">
+                    <h2>System Info</h2>
+                </div>
+                <div class="info-rows">
+                    <div class="info-row">
+                        <span class="info-label">Key Generation</span>
+                        <span class="info-val">os.urandom(32)</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Algorithm</span>
+                        <span class="info-val">secp256k1</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Threads</span>
+                        <span class="info-val" id="threadInfo">20 workers</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Keyspace</span>
+                        <span class="info-val">2¹⁶⁰</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Network</span>
+                        <span class="info-val">Ethereum Mainnet</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Notification</span>
+                        <span class="info-val">Telegram Bot</span>
+                    </div>
+                </div>
+                <div class="disclaimer">
+                    ⚠️ Educational use only. Probability of finding a funded wallet is astronomically low (≈1 in 2¹⁶⁰).
                 </div>
             </div>
         </div>
 
-        <div class="logs-section">
-            <h2>📝 Live Activity Log</h2>
-            <div class="logs-container" id="logsContainer">
-                <div class="log-entry">System ready... waiting for data</div>
-            </div>
-        </div>
-
-        <div class="footer">
-            <p>⚠️ <strong>DISCLAIMER:</strong> This is an educational demonstration. The probability of finding a funded Ethereum wallet is astronomically low (≈1 in 2^160). Private keys are generated randomly and checked against the Ethereum network via public RPC endpoints.</p>
-            <p class="small">🔒 Private keys are ONLY sent to configured Telegram chat. No data is stored permanently.</p>
-        </div>
     </div>
 
     <script>
+        let prevChecked = 0;
+
         function formatNumber(num) {
+            if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M';
+            if (num >= 1_000) return (num / 1_000).toFixed(1) + 'K';
             return num.toLocaleString();
         }
 
-        function formatEth(eth) {
-            return eth.toFixed(8);
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        function logClass(text) {
+            if (text.includes('FOUND') || text.includes('💰')) return 'log-found';
+            if (text.includes('❌') || text.includes('error') || text.includes('Error')) return 'log-error';
+            if (text.includes('⚠️')) return 'log-warn';
+            if (text.includes('✅')) return 'log-success';
+            return 'log-info';
+        }
+
+        function parseLog(raw) {
+            const match = raw.match(/^\[(\d{2}:\d{2}:\d{2})\]\s(.+)$/);
+            if (match) return { time: match[1], msg: match[2] };
+            return { time: '', msg: raw };
         }
 
         function fetchStats() {
             fetch('/api/stats')
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
-                    document.getElementById('totalChecked').innerText = formatNumber(data.total_checked);
-                    document.getElementById('totalFound').innerText = formatNumber(data.total_found);
-                    document.getElementById('totalEth').innerText = formatEth(data.total_eth);
-                    document.getElementById('speed').innerText = data.speed;
-                    document.getElementById('uptime').innerText = data.uptime;
-                    document.getElementById('rpcStatus').innerHTML = data.rpc_status;
+                    document.getElementById('totalChecked').textContent = formatNumber(data.total_checked);
+                    document.getElementById('totalFound').textContent = formatNumber(data.total_found);
+                    document.getElementById('totalEth').textContent = parseFloat(data.total_eth).toFixed(8);
+                    document.getElementById('speed').textContent = data.speed;
+                    document.getElementById('uptime').textContent = data.uptime;
+                    document.getElementById('rpcStatus').textContent = data.rpc_status;
+                    document.getElementById('rpcDetail').textContent = data.current_rpc;
 
-                    // Update logs
-                    const logsContainer = document.getElementById('logsContainer');
+                    // Speed meter (max visual at 200 w/s)
+                    const pct = Math.min((data.speed / 200) * 100, 100);
+                    document.getElementById('speedMeter').style.width = pct + '%';
+
+                    // Checked bar (visual pulse, just show activity)
+                    const barPct = data.total_checked > 0 ? Math.min(((data.total_checked % 10000) / 10000) * 100, 100) : 0;
+                    document.getElementById('checkedBar').style.width = barPct + '%';
+
+                    // Logs
                     if (data.logs && data.logs.length > 0) {
-                        logsContainer.innerHTML = data.logs.map(log => 
-                            `<div class="log-entry">${escapeHtml(log)}</div>`
-                        ).join('');
-                    } else {
-                        logsContainer.innerHTML = '<div class="log-entry">No activity yet...</div>';
+                        document.getElementById('logCount').textContent = data.logs.length + ' entries';
+                        document.getElementById('logsContainer').innerHTML = data.logs.map(raw => {
+                            const { time, msg } = parseLog(raw);
+                            const cls = logClass(raw);
+                            return `<div class="log-entry ${cls}">
+                                <span class="log-time">${time}</span>
+                                <span class="log-msg">${escapeHtml(msg)}</span>
+                            </div>`;
+                        }).join('');
                     }
+
+                    prevChecked = data.total_checked;
                 })
-                .catch(error => console.error('Error fetching stats:', error));
+                .catch(() => {});
         }
-        
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-        
-        // Auto refresh every 3 seconds
+
         fetchStats();
-        setInterval(fetchStats, 3000);
+        setInterval(fetchStats, 2000);
     </script>
 </body>
 </html>
