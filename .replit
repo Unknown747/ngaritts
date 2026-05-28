@@ -2,8 +2,9 @@ modules = ["python-3.12", "web"]
 
 [deployment]
 router = "application"
-deploymentTarget = "cloudrun"
+deploymentTarget = "vm"
 run = ["gunicorn", "--bind=0.0.0.0:5000", "--workers=1", "--threads=4", "--timeout=120", "main:app"]
+build = ["bash", "-c", '''mkdir -p /usr/local/bin && printf '#!/bin/bash\nexit 0\n' > /usr/local/bin/pnpm && chmod +x /usr/local/bin/pnpm && pip install -r requirements.txt''']
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
